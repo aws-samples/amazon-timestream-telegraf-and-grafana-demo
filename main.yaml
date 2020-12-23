@@ -1,0 +1,624 @@
+Parameters:
+
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.10.0.0/16
+
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.10.10.0/24
+
+  PublicSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the second Availability Zone
+    Type: String
+    Default: 10.10.11.0/24
+
+  AllowedIP:
+    Description: Allowed IP range for Grafana
+    Type: String
+    Default: 0.0.0.0/0
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Join [ '', ['VPC'] ]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', ['IGW'] ]
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: "Public Subnet (AZ1)"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs  '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: "Public Subnet (AZ2)"
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Public Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+
+  TimeStreamDatabase:
+    Type: AWS::Timestream::Database
+    Properties:
+      DatabaseName: ec2Metrics
+      Tags:
+        - Key: Name
+          Value: TimeStreamDatabase
+
+  TimeStreamCPUTable:
+    Type: AWS::Timestream::Table
+    Properties:
+      DatabaseName: !Ref TimeStreamDatabase
+      RetentionProperties:
+        MemoryStoreRetentionPeriodInHours: "24"
+        MagneticStoreRetentionPeriodInDays: "7"
+      TableName: cpu
+      Tags:
+        - Key: Name
+          Value: cpu
+
+  TimeStreamMemTable:
+    Type: AWS::Timestream::Table
+    Properties:
+      DatabaseName: !Ref TimeStreamDatabase
+      RetentionProperties:
+        MemoryStoreRetentionPeriodInHours: "24"
+        MagneticStoreRetentionPeriodInDays: "7"
+      TableName: mem
+      Tags:
+        - Key: Name
+          Value: mem
+
+  TimeStreamDiskTable:
+    Type: AWS::Timestream::Table
+    Properties:
+      DatabaseName: !Ref TimeStreamDatabase
+      RetentionProperties:
+        MemoryStoreRetentionPeriodInHours: "24"
+        MagneticStoreRetentionPeriodInDays: "7"
+      TableName: disk
+      Tags:
+        - Key: Name
+          Value: disk
+
+  TimeStreamSystemTable:
+    Type: AWS::Timestream::Table
+    Properties:
+      DatabaseName: !Ref TimeStreamDatabase
+      RetentionProperties:
+        MemoryStoreRetentionPeriodInHours: "24"
+        MagneticStoreRetentionPeriodInDays: "7"
+      TableName: system
+      Tags:
+        - Key: Name
+          Value: system
+
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Join:
+        - ''
+        - ['ec2-role']
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+      Policies:
+        -
+          PolicyName: !Join [ '', ['TimeStreamPolicy'] ]
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - timestream:WriteRecords
+                  - timestream:DescribeDatabase
+                  - timestream:DescribeEndpoints
+                  - timestream:CreateTable
+                Resource: '*'
+
+  GrafanaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Join:
+        - ''
+        - ['grafana-role']
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+      - arn:aws:iam::aws:policy/AmazonTimestreamReadOnlyAccess
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName:
+        Fn::Join:
+        - ''
+        - ['ec2-profile']
+      Path: /
+      Roles:
+        - !Ref Role
+
+  GrafanaInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName:
+        Fn::Join:
+        - ''
+        - ['grafana-profile']
+      Path: /
+      Roles:
+        - !Ref GrafanaRole
+
+  LinuxSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription:
+        Fn::Join:
+        - ''
+        - ['ec2-sg']
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: !Ref AllowedIP
+
+  LaunchConfigWebServer:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroups:
+      - Ref: LinuxSecurityGroup
+      InstanceType: t3.small
+      EbsOptimized: "true"
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+
+            # Install Telegraf using the yum package manager
+            cat <<'EOT' >> /etc/yum.repos.d/influxdb.repo
+            [influxdb]
+            name = InfluxDB Repository - RHEL 7
+            baseurl = https://repos.influxdata.com/rhel/7/$basearch/stable
+            enabled = 1
+            gpgcheck = 1
+            gpgkey = https://repos.influxdata.com/influxdb.key
+            EOT
+
+            # Install Telegraf
+            yum install telegraf -y
+
+            # Backup current configs
+            mv /etc/telegraf/telegraf.conf /etc/telegraf/telegraf.bckp
+
+            # Timestream Config
+            cat <<'EOT' >> /etc/telegraf/telegraf.conf
+
+            [global_tags]
+              microservice = "web"
+              region = "${Region}"
+
+            [agent]
+              interval = "10s"
+              round_interval = true
+              metric_batch_size = 1000
+              metric_buffer_limit = 10000
+              collection_jitter = "0s"
+              flush_interval = "10s"
+              flush_jitter = "0s"
+              precision = ""
+              hostname = ""
+              omit_hostname = false
+
+            [[outputs.timestream]]
+              region = "${Region}"
+              database_name = "${TimeStreamDatabase}"
+              describe_database_on_start = false
+              mapping_mode = "multi-table"
+              create_table_if_not_exists = true
+              create_table_magnetic_store_retention_period_in_days = 365
+              create_table_memory_store_retention_period_in_hours = 24
+
+            [[inputs.cpu]]
+              percpu = true
+              totalcpu = true
+              collect_cpu_time = false
+              report_active = false
+
+            [[inputs.mem]]
+
+            [[inputs.disk]]
+              ignore_fs = ["tmpfs", "devtmpfs"]
+
+            [[inputs.system]]
+            EOT
+
+            # Start Telegraf Service
+            service telegraf start
+
+            # Install Epel Release and Stress
+            sudo amazon-linux-extras install epel -y
+            yum install stress -y
+
+            # Setup Crons to Stress The Machines to generate different metrics
+            cat <<EOT >> /home/ec2-user/cron
+            */3 * * * * stress -c 2 -i 2 -m 2 -d 10 --vm-bytes 512M -t 60s > /home/ec2-user/stress.log 2>&1
+            EOT
+            crontab -u ec2-user /home/ec2-user/cron
+          -
+            Region:
+              !Ref "AWS::Region"
+            TimeStreamDatabase:
+              !Ref TimeStreamDatabase
+
+
+  AutoScalingWebServer:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      LaunchConfigurationName: !Ref LaunchConfigWebServer
+      MinSize: '2'
+      MaxSize: '2'
+      HealthCheckGracePeriod: 300
+      MaxInstanceLifetime: 2592000
+      Tags:
+        - Key: Name
+          PropagateAtLaunch: True
+          Value:
+            Fn::Join:
+              - ''
+              - ['Web Server']
+
+  LaunchConfigBackofficeServer:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroups:
+      - Ref: LinuxSecurityGroup
+      InstanceType: t3.micro
+      EbsOptimized: "true"
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+
+            # Install Telegraf using the yum package manager
+            cat <<'EOT' >> /etc/yum.repos.d/influxdb.repo
+            [influxdb]
+            name = InfluxDB Repository - RHEL 7
+            baseurl = https://repos.influxdata.com/rhel/7/$basearch/stable
+            enabled = 1
+            gpgcheck = 1
+            gpgkey = https://repos.influxdata.com/influxdb.key
+            EOT
+
+            # Install Telegraf
+            yum install telegraf -y
+
+            # Backup current configs
+            mv /etc/telegraf/telegraf.conf /etc/telegraf/telegraf.bckp
+
+            # Timestream Config
+            cat <<'EOT' >> /etc/telegraf/telegraf.conf
+
+            [global_tags]
+              microservice = "backoffice"
+              region = "${Region}"
+
+            [agent]
+              interval = "10s"
+              round_interval = true
+              metric_batch_size = 1000
+              metric_buffer_limit = 10000
+              collection_jitter = "0s"
+              flush_interval = "10s"
+              flush_jitter = "0s"
+              precision = ""
+              hostname = ""
+              omit_hostname = false
+
+            [[outputs.timestream]]
+              region = "${Region}"
+              database_name = "${TimeStreamDatabase}"
+              describe_database_on_start = false
+              mapping_mode = "multi-table"
+              create_table_if_not_exists = true
+              create_table_magnetic_store_retention_period_in_days = 365
+              create_table_memory_store_retention_period_in_hours = 24
+
+            [[inputs.cpu]]
+              percpu = true
+              totalcpu = true
+              collect_cpu_time = false
+              report_active = false
+
+            [[inputs.mem]]
+
+            [[inputs.disk]]
+              ignore_fs = ["tmpfs", "devtmpfs"]
+
+            [[inputs.system]]
+            EOT
+
+            # Start Telegraf Service
+            service telegraf start
+          -
+            Region:
+              !Ref "AWS::Region"
+            TimeStreamDatabase:
+              !Ref TimeStreamDatabase
+
+
+  AutoScalingBackofficeServer:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      LaunchConfigurationName: !Ref LaunchConfigBackofficeServer
+      MinSize: '1'
+      MaxSize: '1'
+      HealthCheckGracePeriod: 300
+      MaxInstanceLifetime: 2592000
+      Tags:
+        - Key: Name
+          PropagateAtLaunch: True
+          Value:
+            Fn::Join:
+              - ''
+              - ['Backoffice Server']
+
+  # ALB for Grafana
+  ALBGrafanaListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: GrafanaTargetGroup
+      LoadBalancerArn:
+          Ref: ALBGrafana
+      Port: 80
+      Protocol: HTTP
+
+  ALBGrafana:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets:
+      - Ref: PublicSubnet1
+      - Ref: PublicSubnet2
+      SecurityGroups:
+      - Ref: ALBGrafanaSG
+
+#  ALB Security Group with Allowed IPs
+  ALBGrafanaSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+        GroupDescription: 'grafana-alb'
+        VpcId:
+          Ref: VPC
+        SecurityGroupIngress:
+            - IpProtocol: tcp
+              CidrIp: !Ref AllowedIP
+              FromPort: 80
+              ToPort: 80
+
+  GrafanaTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 5
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 3
+      HealthyThresholdCount: 3
+      HealthCheckPath: '/api/health'
+      Matcher:
+        HttpCode: '200'
+      Name: GrafanaTargetGroup
+      Port: 3000
+      Protocol: HTTP
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: '10'
+      UnhealthyThresholdCount: 3
+      VpcId:
+        Ref: 'VPC'
+      TargetType: instance
+      Targets:
+      - Id: !Ref GrafanaInstance
+
+
+  GrafanaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription:
+        Fn::Join:
+        - ''
+        - ['grafana-sg']
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '3000'
+        ToPort: '3000'
+        SourceSecurityGroupId: !Ref ALBGrafanaSG
+
+  GrafanaInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.small
+      IamInstanceProfile: !Ref GrafanaInstanceProfile
+      ImageId: !Ref LatestAmiId
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          GroupSet:
+            - !Ref GrafanaSecurityGroup
+          SubnetId:
+            Ref: PublicSubnet1
+      Tags:
+          - Key: Name
+            Value:
+              Fn::Join:
+              - ': '
+              - ['Grafana Instance']
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+
+            # Install Grafana using the yum package manager
+            cat <<'EOT' >> /etc/yum.repos.d/grafana.repo
+            [grafana]
+            name=grafana
+            baseurl=https://packages.grafana.com/oss/rpm
+            repo_gpgcheck=1
+            enabled=1
+            gpgcheck=1
+            gpgkey=https://packages.grafana.com/gpg.key
+            sslverify=1
+            sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+            EOT
+
+            # Install Grafana
+            yum install grafana -y
+
+            # Change Default Grafana Password
+            #/usr/sbin/grafana-cli admin reset-admin-password AWSomeGrafana2021
+
+            # Install Grafana Timestream Plugin
+            /usr/sbin/grafana-cli plugins install grafana-timestream-datasource
+
+            # Configure Amazon Timestream DataSource
+            cat <<'EOT' >> /etc/grafana/provisioning/datasources/timestream.yaml
+            apiVersion: 1
+
+            datasources:
+              - name: Amazon Timestream
+                type: grafana-timestream-datasource
+                jsonData:
+                  defaultRegion: us-west-2
+            EOT
+
+            # Configure a Sample Dashboard
+            mkdir /etc/grafana/dashboards
+            wget -q -O /etc/grafana/dashboards/timestream.json https://raw.githubusercontent.com/aws-samples/amazon-timestream-telegraf-and-grafana-demo/main/timestream.json
+
+            cat <<'EOT' >> /etc/grafana/provisioning/dashboards/timestream.yaml
+            apiVersion: 1
+
+            providers:
+            - name: dashboards
+              type: file
+              updateIntervalSeconds: 30
+              options:
+                path: /etc/grafana/dashboards
+                foldersFromFilesStructure: true
+            EOT
+
+            #
+            chown root:grafana -R /etc/grafana/
+
+            # Enable and Start Grafana Service
+            systemctl enable grafana-server
+            systemctl start grafana-server
+          -
+            Region:
+              !Ref "AWS::Region"
+            TimeStreamDatabase:
+              !Ref TimeStreamDatabase
+
+Outputs:
+  ALBGrafanaDNSName:
+    Description: "The DNS name for Grafana ALB."
+    Value: !GetAtt ALBGrafana.DNSName
