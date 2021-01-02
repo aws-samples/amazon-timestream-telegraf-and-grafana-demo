@@ -20,7 +20,7 @@ aws cloudformation create-stack --stack-name timestream-telegraf \
    --region us-west-2
 ```
 
-### Accessing Grafana
+### Accessing Grafana Dashboard
 
 Once stack creation is completed, it will output the Application Load Balancer DNS Name under "Outputs" tab of your stack. Another way of accessing via CLI:
 
@@ -32,6 +32,8 @@ aws cloudformation describe-stacks --stack-name timestream-telegraf \
 
 **Username:** ```admin```
 **Password:** ```admin```
+
+After logged in, under Dashboards, you will find a sample dashboard called "Amazon Timestream Dashboard".
 
 ###  Clean up
 After completing your demo, delete AWS CloudFormation Stack using AWS Console or AWS CLI:
