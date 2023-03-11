@@ -379,7 +379,7 @@ Resources:
             baseurl = https://repos.influxdata.com/rhel/7/$basearch/stable
             enabled = 1
             gpgcheck = 1
-            gpgkey = https://repos.influxdata.com/influxdb.key
+            gpgkey = https://repos.influxdata.com/influxdata-archive_compat.key
             EOT
 
             # Install Telegraf
@@ -587,7 +587,7 @@ Resources:
               - name: Amazon Timestream
                 type: grafana-timestream-datasource
                 jsonData:
-                  defaultRegion: us-west-2
+                  defaultRegion: ${Region}
             EOT
 
             # Configure a Sample Dashboard
